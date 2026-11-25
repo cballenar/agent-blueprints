@@ -1,3 +1,4 @@
+<!-- version: 1.0 -->
 # Autonomous Safety Guardrails
 
 **Scope:** These rules apply **only during unattended / scheduled (`autonomous-dispatcher`) runs**. Interactive sessions with `<owner>` are governed by normal workspace judgment.
