@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 0 concurrency guard and SHA-256 GitHub queue hash gate (project-agnostic)."""
+"""Phase 0 concurrency, lease recovery, and SHA-256 GitHub queue hash gate (project-agnostic)."""
 
 from __future__ import annotations
 
@@ -8,11 +8,14 @@ import hashlib
 import json
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 AGENT_COMMENT_PREFIXES = ("**[Agent]**", "[Agent]")
 SKIP_EXIT_CODE = 10
+DEFAULT_LEASE_TTL = 1800  # 30 minutes
 
 
 def _run(cmd: list[str], cwd: Path | None = None) -> str:
@@ -39,6 +42,63 @@ def _gh_owner(repo_root: Path) -> str:
     return _run(["gh", "api", "user", "--jq", ".login"], cwd=repo_root)
 
 
+def _git_common_dir(repo_root: Path) -> Path:
+    raw = Path(_run(["git", "rev-parse", "--git-common-dir"], cwd=repo_root))
+    return raw if raw.is_absolute() else (repo_root / raw).resolve()
+
+
+def _parse_iso_epoch(ts: str | None) -> float:
+    if not ts:
+        return 0.0
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _latest_local_activity(repo_root: Path, git_dir: Path, dirty_status: str) -> float:
+    latest = 0.0
+    try:
+        latest = max(latest, float(_run(["git", "log", "-1", "--format=%ct"], cwd=repo_root) or 0))
+    except subprocess.CalledProcessError:
+        pass
+
+    index_file = git_dir / "index"
+    if index_file.exists():
+        latest = max(latest, index_file.stat().st_mtime)
+
+    for line in dirty_status.splitlines():
+        rel = line[3:].strip().split(" -> ")[-1].strip('"')
+        candidate = repo_root / rel
+        if candidate.exists():
+            latest = max(latest, candidate.stat().st_mtime)
+    return latest
+
+
+def _read_lease(lease_file: Path) -> dict[str, Any] | None:
+    if not lease_file.is_file():
+        return None
+    try:
+        return json.loads(lease_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _write_lease(lease_file: Path, ttl_seconds: int, mode: str) -> None:
+    if lease_file.parent.is_dir():
+        payload = {
+            "started_at": int(time.time()),
+            "ttl_seconds": ttl_seconds,
+            "mode": mode,
+        }
+        lease_file.write_text(f"{json.dumps(payload)}\n", encoding="utf-8")
+
+
+def _clear_lease(lease_file: Path) -> None:
+    if lease_file.is_file():
+        lease_file.unlink(missing_ok=True)
+
+
 def _looks_like_waiting_on_human(issue: dict[str, Any], owner: str) -> bool:
     """Return True when a human-queue issue is still assigned to owner and awaits a reply."""
     assignees = {a.get("login", "") for a in issue.get("assignees", [])}
@@ -61,42 +121,90 @@ def _compute_digest(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()[:12]
 
 
-def _git_common_dir(repo_root: Path) -> Path:
-    raw = Path(_run(["git", "rev-parse", "--git-common-dir"], cwd=repo_root))
-    return raw if raw.is_absolute() else (repo_root / raw).resolve()
-
-
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Phase 0 concurrency & SHA-256 GitHub queue gate.")
+    parser = argparse.ArgumentParser(
+        description="Phase 0 concurrency, lease recovery & SHA-256 GitHub queue gate."
+    )
     parser.add_argument(
         "--exit-code",
         action="store_true",
         help="Exit 10 on SKIP:* so shell/cron wrappers can gate agent launch with '&&'.",
     )
+    parser.add_argument(
+        "--lease-ttl",
+        type=int,
+        default=DEFAULT_LEASE_TTL,
+        help=f"Seconds of inactivity before a leased lock becomes recoverable (default: {DEFAULT_LEASE_TTL}).",
+    )
     args = parser.parse_args()
     skip_code = SKIP_EXIT_CODE if args.exit_code else 0
+    now = time.time()
 
     repo_root = _repo_root()
-    state_hash_file = _git_common_dir(repo_root) / "preflight_state.sha256"
+    git_dir = _git_common_dir(repo_root)
+    state_hash_file = git_dir / "preflight_state.sha256"
+    lease_file = git_dir / "dispatcher_lease.json"
 
-    # 1. Concurrency lock
+    # 1. Concurrency & Stale-Lease Check
     branch = _run(["git", "branch", "--show-current"], cwd=repo_root)
-    if branch != "main":
-        print(f"SKIP:BUSY (branch={branch} != main)")
-        return skip_code
-
-    if _run(["git", "status", "--porcelain"], cwd=repo_root):
-        print("SKIP:BUSY (dirty working tree)")
-        return skip_code
-
+    dirty_status = _run(["git", "status", "--porcelain"], cwd=repo_root)
     in_progress = _run_json(
-        ["gh", "issue", "list", "--state", "open", "--label", "status:in-progress", "--json", "number"],
+        [
+            "gh", "issue", "list", "--state", "open",
+            "--label", "status:in-progress",
+            "--json", "number,title,updatedAt",
+        ],
         cwd=repo_root,
     )
-    if in_progress:
-        nums = ",".join(f"#{i['number']}" for i in in_progress)
-        print(f"SKIP:BUSY (in-progress issues: {nums})")
-        return skip_code
+
+    local_locked = branch != "main" or bool(dirty_status)
+    remote_locked = bool(in_progress)
+    lease = _read_lease(lease_file)
+
+    if not local_locked and not remote_locked:
+        _clear_lease(lease_file)
+    else:
+        reasons: list[str] = []
+        if branch != "main":
+            reasons.append(f"branch={branch} != main")
+        if dirty_status:
+            reasons.append("dirty working tree")
+        if in_progress:
+            nums = ",".join(f"#{i['number']}" for i in in_progress)
+            reasons.append(f"in-progress issues: {nums}")
+        reason_str = "; ".join(reasons)
+
+        # Never clobber local git state if no autonomous lease exists (protects human interactive work).
+        if local_locked and lease is None:
+            print(f"SKIP:BUSY (unleased local state: {reason_str})")
+            return skip_code
+
+        ttl = int((lease or {}).get("ttl_seconds") or args.lease_ttl)
+        last_touch = float((lease or {}).get("started_at") or 0.0)
+        if local_locked:
+            last_touch = max(last_touch, _latest_local_activity(repo_root, git_dir, dirty_status))
+        for issue in in_progress:
+            last_touch = max(last_touch, _parse_iso_epoch(issue.get("updatedAt")))
+
+        age = int(max(0.0, now - last_touch)) if last_touch > 0 else ttl
+        if age < ttl:
+            print(f"SKIP:BUSY ({reason_str}; active {age}s < {ttl}s TTL)")
+            return skip_code
+
+        _write_lease(lease_file, args.lease_ttl, mode="recover")
+        recovery_payload = {
+            "age_seconds": age,
+            "branch": branch,
+            "dirty": bool(dirty_status),
+            "in_progress_issues": [
+                {"number": i["number"], "title": i.get("title", "")} for i in in_progress
+            ],
+        }
+        print(
+            f"RUN:RECOVER_STALE (age={age}s) "
+            f"{json.dumps(recovery_payload, separators=(',', ':'))}"
+        )
+        return 0
 
     # 2. GitHub queue snapshot & SHA-256 hash
     owner = _gh_owner(repo_root)
@@ -193,6 +301,7 @@ def main() -> int:
         print(f"SKIP:NO_ACTIONABLE_WORK (sha256={digest})")
         return skip_code
 
+    _write_lease(lease_file, args.lease_ttl, mode="work")
     actionable = {
         "sha256": digest,
         "ready_issues": [{"number": i["number"], "title": i["title"]} for i in ready_raw],

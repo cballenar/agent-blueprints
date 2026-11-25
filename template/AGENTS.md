@@ -1,4 +1,4 @@
-<!-- version: 1.0 -->
+<!-- version: 1.1 -->
 # `<Project Title>` — Agent Workspace Rules
 
 ## Project & Spec
@@ -73,11 +73,12 @@ Enables scheduled or unattended agent runs against unassigned `status:ready` iss
 
 ### Phase 0: Scheduled Concurrency & Hash Gate
 Run `preflight_check.py --exit-code` *before* launching an agent if your scheduler supports pre-launch shell gates; otherwise, scheduled runs MUST execute `python3 <path/to/preflight_check.py>` as their **first tool call before reading any files**:
-1. **Lock (`SKIP:BUSY`):** Abort if `branch != main`, `git status --porcelain` non-empty, or open `status:in-progress` > `0`.
-2. **Hash (`SKIP:NO_CHANGE` / `SKIP:NO_ACTIONABLE_WORK`):** SHA-256 of open `status:ready`, open PRs, and human-queue assignees/comments cached in `.git/preflight_state.sha256`.
-3. If stdout starts with `SKIP:`, reply with that line and stop immediately (0 file reads, 0 extra calls). Proceed only on `RUN:WORK_READY`.
+1. **Lock (`SKIP:BUSY`):** Abort if `branch != main`, `git status --porcelain` non-empty, or open `status:in-progress` > `0` within the active lease TTL (or whenever local git is dirty without an autonomous lease, protecting interactive work).
+2. **Stale Recovery (`RUN:RECOVER_STALE`):** Emitted if a prior autonomous run's lease (`.git/dispatcher_lease.json`, default 30m) and activity expired mid-flight. Land finished work if verified; otherwise stash uncommitted WIP, restore clean `main`, reset orphaned `status:in-progress` -> `status:ready`, and exit.
+3. **Hash (`SKIP:NO_CHANGE` / `SKIP:NO_ACTIONABLE_WORK`):** SHA-256 of open `status:ready`, open PRs, and human-queue assignees/comments cached in `.git/preflight_state.sha256`.
+4. If stdout starts with `SKIP:`, reply with that line and stop immediately (0 file reads, 0 extra calls). Proceed only on `RUN:WORK_READY` or `RUN:RECOVER_STALE`.
 
-### Autonomous Loop
+### Autonomous Loop (One Wave Per Run)
 1. Sync `main`; triage `<owner>` replies on human issues (update spec, transition to `status:ready` or close, unblock downstream issues) and finish open PRs first.
-2. Claim `status:ready` -> `status:in-progress`; execute and land per the chosen delivery strategy (parallelize non-colliding domains only in isolated worktrees/workspaces).
-3. Unblock satisfied `status:blocked` issues and file follow-up `status:ready` / `status:needs-decision` / `status:human-spike` issues.
+2. Execute **at most one wave per run** (1 issue in single-agent mode, or 1 non-colliding `domain:*` batch across isolated `share`/`branch` worker workspaces), remove `status:in-progress` on completion, return to clean `main`, and **exit**—never loop back to claim another wave in the same session.
+3. Unblock satisfied `status:blocked` issues and file follow-up `status:ready` / `status:needs-decision` / `status:human-spike` issues before exiting.
