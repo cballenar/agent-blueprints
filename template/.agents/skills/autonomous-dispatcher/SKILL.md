@@ -1,6 +1,6 @@
 ---
 name: autonomous-dispatcher
-version: 1.1
+version: 1.2
 description: Autonomous GitHub issue triage, execution, verification, and delivery loop. Use during scheduled cron runs or when asked to advance the GitHub backlog autonomously.
 ---
 
@@ -80,7 +80,8 @@ Each scheduled session executes **at most one wave** and exits—never loop back
    - **Option B (PR-Gated / Proposal-First):** Branch `feat/issue-<n>-<slug>` or `fix/issue-<n>-<slug>` from `main`.
    - **Release Bundle PR Add-On (if enabled):** Target the active integration/release branch (`develop` or `release/vX.Y.Z`) before bundling into `main`.
    - *Parallel Mode:* Dispatch each issue to its own isolated worker (`workspace: "share"` or `"branch"`), keeping the primary workspace clean on `main` until verified branches are ready to land.
-3. Implement acceptance criteria and run the repository's verification checks after the final edit; never proceed with failing or skipped checks.
+3. Implement acceptance criteria and run the repository's verification checks after the final edit; never proceed with failing or skipped checks. Respect `.agents/rules/autonomous-safety.md` (max 3 retry cycles on the same failure; never edit control-plane files autonomously).
+4. Run the `quality-gate` skill (`.agents/skills/quality-gate/SKILL.md`) to audit the diff against issue acceptance criteria before Phase 4.
 
 ---
 

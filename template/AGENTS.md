@@ -1,4 +1,4 @@
-<!-- version: 1.1 -->
+<!-- version: 1.2 -->
 # `<Project Title>` — Agent Workspace Rules
 
 ## Project & Spec
@@ -7,7 +7,7 @@
 - **Goal:** `<1–2 sentence summary>`
 
 ## Project Structure
-*(Keep the option matching this repo and delete the rest on deployment. Shared convention: `.agents/skills/` holds domain runbooks and optional pre-flight scripts.)*
+*(Keep the option matching this repo and delete the rest on deployment, or run `.agents/skills/repo-bootstrap/SKILL.md`. Shared convention: `.agents/skills/` holds domain runbooks/scripts and `.agents/rules/` holds execution guardrails.)*
 
 ### Option A: Multi-Part / Hybrid
 - `<component-a>/`, `<component-b>/` — Independent subsystems (`<verify commands>`).
@@ -61,7 +61,7 @@ GitHub Issues (`gh`) record *when*, *why*, and *how* every change happened—whe
 
 ### Delivery Rules
 - **Commits:** Conventional Commits referencing `#<n>` (`feat|fix|docs(<scope>): <summary> (#<n>)`).
-- **Verification:** Run repo verification checks after the final edit; never push or merge failing/skipped checks.
+- **Verification:** Run repo verification checks after the final edit and pass `.agents/skills/quality-gate/SKILL.md` before landing; never push or merge failing/skipped checks.
 - **Releases:** Cut tagged releases per completed Milestone on green `main`: `gh release create vX.Y.Z --generate-notes`.
 
 ---
