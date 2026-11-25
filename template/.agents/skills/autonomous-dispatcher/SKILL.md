@@ -1,6 +1,6 @@
 ---
 name: autonomous-dispatcher
-version: 1.2
+version: 1.3
 description: Autonomous GitHub issue triage, execution, verification, and delivery loop. Use during scheduled cron runs or when asked to advance the GitHub backlog autonomously.
 ---
 
@@ -90,7 +90,7 @@ Each scheduled session executes **at most one wave** and exits—never loop back
 1. Commit using Conventional Commits (`feat|fix|docs(<scope>): <summary> (#<n>)`).
 2. Land according to `AGENTS.md`:
    - **Option A (Direct-to-Main):** Push verified commit referencing `Closes #<n>` (or close via `gh issue close <n>`).
-   - **Option B (PR-Gated / Proposal-First):** Push branch, open PR with `Closes #<n>`, wait for green CI (`gh pr checks <pr> --watch`), squash-merge (`gh pr merge <pr> --squash --delete-branch`), then `git checkout main && git pull --ff-only`.
+   - **Option B (PR-Gated / Proposal-First):** Push branch, open PR with `Closes #<n>`, and queue auto-merge (`gh pr merge <pr> --auto --squash --delete-branch`). If auto-merge is not enabled on the repo, do **not** block on `gh pr checks --watch` in unattended runs—leave the open PR for the next tick's Phase 2 to squash-merge once green (`gh pr merge <pr> --squash --delete-branch`). Always return to clean `main` (`git checkout main && git pull --ff-only`) before exiting.
    - **Release Bundle PR Add-On (if enabled):** Land verified issue work onto the integration/release branch and open/update the bundle PR into `main` for pre-deploy verification.
 3. **Clean Up Status Label (All Strategies):**
    ```bash
@@ -108,8 +108,11 @@ Each scheduled session executes **at most one wave** and exits—never loop back
 
 When bootstrapping a repository on a platform that supports agent-created schedules (such as Antigravity's `automation` skill), create the scheduled automation using the appropriate template below and prompt `<owner>` to review permissions and enable it—never force-enable it silently.
 
+- **Unattended Permissions:** Headless runs require pre-approved network/config access for `gh`, `git`, and `preflight_check.py` (e.g., `BypassSandbox` or allowlisted command rules) so they do not stall on interactive permission prompts.
+- **Upgrading from v1.0:** Updating files in-repo does not update external scheduler prompts. Ensure any existing scheduled prompt triggers on `RUN:` (or both `RUN:WORK_READY` and `RUN:RECOVER_STALE`) so timed-out runs are recovered.
+
 ### Option 1: Pre-Launch Shell Gate (Preferred When Supported — 0 Agent Launches When Idle)
-If your scheduler (cron, launchd, systemd, CI, or wrapper runner) can run a script prior to starting an agent session, gate the launch directly with `--exit-code` (exits `0` on `RUN:WORK_READY` or `RUN:RECOVER_STALE`, `10` on `SKIP:*`):
+If your scheduler (cron, launchd, systemd, CI, or wrapper runner) can run a script prior to starting an agent session, gate the launch directly with `--exit-code` (exits `0` on `RUN:*`, `10` on `SKIP:*`):
 
 ```bash
 cd <repo-root> && python3 .agents/skills/autonomous-dispatcher/scripts/preflight_check.py --exit-code && <launch-agent-command>
@@ -122,5 +125,5 @@ Use this prompt so idle runs cost one tool call and zero file reads:
 Work in <repo-root>. BEFORE reading AGENTS.md, SKILL.md, or any other file, run:
 python3 <repo-root>/.agents/skills/autonomous-dispatcher/scripts/preflight_check.py
 If stdout starts with SKIP:, output that single line verbatim and end your turn immediately without calling any other tools.
-ONLY if stdout starts with RUN:WORK_READY or RUN:RECOVER_STALE: read AGENTS.md and .agents/skills/autonomous-dispatcher/SKILL.md and execute the corresponding phase, then exit after one wave.
+ONLY if stdout starts with `RUN:` — read AGENTS.md and .agents/skills/autonomous-dispatcher/SKILL.md and execute the corresponding phase, then exit after one wave.
 ```

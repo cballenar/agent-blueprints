@@ -1,4 +1,4 @@
-<!-- version: 1.2 -->
+<!-- version: 1.3 -->
 # `<Project Title>` — Agent Workspace Rules
 
 ## Project & Spec
@@ -54,7 +54,7 @@ GitHub Issues (`gh`) record *when*, *why*, and *how* every change happened—whe
 
 ### Option B: PR-Gated / Proposal-First
 - Issues may be opened strictly as questions or proposals—do not implement or open a PR until authorized (`status:ready` or explicit approval).
-- Once authorized, branch `feat/issue-<n>-<slug>` or `fix/issue-<n>-<slug>` from `main`, open a PR with `Closes #<n>`, wait for green CI (`gh pr checks --watch`), squash-merge (`gh pr merge <pr> --squash --delete-branch`), and pull `main`.
+- Once authorized, branch `feat/issue-<n>-<slug>` or `fix/issue-<n>-<slug>` from `main`, open a PR with `Closes #<n>`, enable auto-merge (`gh pr merge <pr> --auto --squash --delete-branch`)—or if auto-merge isn't enabled on the repo, leave the open PR for the next tick (or merge once green interactively)—then return to clean `main` (`git checkout main && git pull --ff-only`).
 
 ### Optional Add-On: Release / Deployment Bundle PRs *(Option A or B)*
 - Accumulate verified commits/branches onto an integration/release branch (`develop` or `release/vX.Y.Z`), then open one bundle PR into `main` for pre-deploy verification.
@@ -76,7 +76,7 @@ Run `preflight_check.py --exit-code` *before* launching an agent if your schedul
 1. **Lock (`SKIP:BUSY`):** Abort if `branch != main`, `git status --porcelain` non-empty, or open `status:in-progress` > `0` within the active lease TTL (or whenever local git is dirty without an autonomous lease, protecting interactive work).
 2. **Stale Recovery (`RUN:RECOVER_STALE`):** Emitted if a prior autonomous run's lease (`.git/dispatcher_lease.json`, default 30m) and activity expired mid-flight. Land finished work if verified; otherwise stash uncommitted WIP, restore clean `main`, reset orphaned `status:in-progress` -> `status:ready`, and exit.
 3. **Hash (`SKIP:NO_CHANGE` / `SKIP:NO_ACTIONABLE_WORK`):** SHA-256 of open `status:ready`, open PRs, and human-queue assignees/comments cached in `.git/preflight_state.sha256`.
-4. If stdout starts with `SKIP:`, reply with that line and stop immediately (0 file reads, 0 extra calls). Proceed only on `RUN:WORK_READY` or `RUN:RECOVER_STALE`.
+4. If stdout starts with `SKIP:`, reply with that line and stop immediately (0 file reads, 0 extra calls). Proceed only if stdout starts with `RUN:` (`RUN:WORK_READY` or `RUN:RECOVER_STALE`).
 
 ### Autonomous Loop (One Wave Per Run)
 1. Sync `main`; triage `<owner>` replies on human issues (update spec, transition to `status:ready` or close, unblock downstream issues) and finish open PRs first.
