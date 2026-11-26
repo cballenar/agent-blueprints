@@ -9,7 +9,7 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,10 +36,6 @@ def _run_json(cmd: list[str], cwd: Path) -> Any:
 
 def _repo_root() -> Path:
     return Path(_run(["git", "rev-parse", "--show-toplevel"]))
-
-
-def _gh_owner(repo_root: Path) -> str:
-    return _run(["gh", "api", "user", "--jq", ".login"], cwd=repo_root)
 
 
 def _git_common_dir(repo_root: Path) -> Path:
@@ -99,10 +95,22 @@ def _clear_lease(lease_file: Path) -> None:
         lease_file.unlink(missing_ok=True)
 
 
-def _looks_like_waiting_on_human(issue: dict[str, Any], owner: str) -> bool:
-    """Return True when a human-queue issue is still assigned to owner and awaits a reply."""
-    assignees = {a.get("login", "") for a in issue.get("assignees", [])}
-    if owner not in assignees:
+def _mentions_assignee_at_start(body: str, assignees: set[str]) -> bool:
+    """Return True when body begins with @<login> for any current assignee."""
+    lower = body.lower()
+    for login in assignees:
+        prefix = f"@{login.lower()}"
+        if lower.startswith(prefix):
+            rest = lower[len(prefix) :]
+            if not rest or not (rest[0].isalnum() or rest[0] == "-"):
+                return True
+    return False
+
+
+def _looks_like_waiting_on_human(issue: dict[str, Any]) -> bool:
+    """Return True when a human-queue issue still has assignee(s) and awaits a reply."""
+    assignees = {a.get("login", "") for a in issue.get("assignees", []) if a.get("login")}
+    if not assignees:
         return False
 
     comments = issue.get("comments") or []
@@ -112,7 +120,7 @@ def _looks_like_waiting_on_human(issue: dict[str, Any], owner: str) -> bool:
     latest_body = (comments[-1].get("body") or "").strip()
     return (
         any(latest_body.startswith(prefix) for prefix in AGENT_COMMENT_PREFIXES)
-        or latest_body.startswith(f"@{owner} ")
+        or _mentions_assignee_at_start(latest_body, assignees)
     )
 
 
@@ -135,6 +143,11 @@ def main() -> int:
         type=int,
         default=DEFAULT_LEASE_TTL,
         help=f"Seconds of inactivity before a leased lock becomes recoverable (default: {DEFAULT_LEASE_TTL}).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Evaluate gate state without writing or clearing lease/hash files.",
     )
     args = parser.parse_args()
     skip_code = SKIP_EXIT_CODE if args.exit_code else 0
@@ -162,7 +175,8 @@ def main() -> int:
     lease = _read_lease(lease_file)
 
     if not local_locked and not remote_locked:
-        _clear_lease(lease_file)
+        if not args.dry_run:
+            _clear_lease(lease_file)
     else:
         reasons: list[str] = []
         if branch != "main":
@@ -191,7 +205,8 @@ def main() -> int:
             print(f"SKIP:BUSY ({reason_str}; active {age}s < {ttl}s TTL)")
             return skip_code
 
-        _write_lease(lease_file, args.lease_ttl, mode="recover")
+        if not args.dry_run:
+            _write_lease(lease_file, args.lease_ttl, mode="recover")
         recovery_payload = {
             "age_seconds": age,
             "branch": branch,
@@ -207,7 +222,6 @@ def main() -> int:
         return 0
 
     # 2. GitHub queue snapshot & SHA-256 hash
-    owner = _gh_owner(repo_root)
     ready_raw = _run_json(
         [
             "gh", "issue", "list", "--state", "open",
@@ -291,17 +305,18 @@ def main() -> int:
     human_updates = [
         {"number": num, "title": issue["title"]}
         for num, issue in sorted(human_by_num.items())
-        if not _looks_like_waiting_on_human(issue, owner)
+        if not _looks_like_waiting_on_human(issue)
     ]
 
-    if state_hash_file.parent.is_dir():
+    if not args.dry_run and state_hash_file.parent.is_dir():
         state_hash_file.write_text(f"{digest}\n", encoding="utf-8")
 
     if not has_queue_work and not human_updates:
         print(f"SKIP:NO_ACTIONABLE_WORK (sha256={digest})")
         return skip_code
 
-    _write_lease(lease_file, args.lease_ttl, mode="work")
+    if not args.dry_run:
+        _write_lease(lease_file, args.lease_ttl, mode="work")
     actionable = {
         "sha256": digest,
         "ready_issues": [{"number": i["number"], "title": i["title"]} for i in ready_raw],

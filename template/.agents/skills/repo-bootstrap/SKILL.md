@@ -1,6 +1,6 @@
 ---
 name: repo-bootstrap
-version: 1.0
+version: 1.1
 description: Initialize a repository from the agent-blueprints template. Verifies git/gh auth, creates required status:* and domain:* GitHub labels, scaffolds PROJECT_SPEC.md, and trims AGENTS.md to the project's chosen structure and merge strategy.
 ---
 
@@ -29,14 +29,16 @@ Without `--dry-run`, this idempotently creates/updates:
 
 ## 2. Tailor `AGENTS.md`
 
-Inspect the repository layout and confirm with `<owner>` (or infer when obvious):
-1. **Header (`Project & Spec`):** Fill in `<Project Title>`, `<owner>/<repo>`, and `<1-2 sentence summary>`.
+Inspect the repository layout and confirm with the human collaborator(s) (or infer when obvious):
+1. **Header (`Project & Spec`):** Fill in `<Project Title>`, `<owner>/<repo>`, `<1-2 sentence summary>`, and `Human Assignee(s)` using the `collaborators` list returned by `bootstrap.py`:
+   - **1 collaborator:** Fill in `@<login>` directly with no extra prompts.
+   - **2+ collaborators:** Confirm the default assignment rule for `status:needs-decision` / `status:human-spike` (all collaborators, a single default owner, or domain-based routing).
 2. **Project Structure:** Keep the single matching Option (**A** Multi-Part, **B** Lean Monorepo, **C** Infrastructure/IaC, or **D** Content/Research), replace `<verify commands>` with the real test/lint/build commands, and delete the unused options.
 3. **Branching, Merging & Release Strategy:** Keep **Option A** (Direct-to-Main) or **Option B** (PR-Gated) and delete the unused option (and the Release Bundle PR add-on unless needed).
 4. **Autonomous Execution:**
    - If working **purely interactively**, delete the `Autonomous Execution` section from `AGENTS.md`.
-   - If enabling **scheduled/unattended runs**, keep `Autonomous Execution` and configure the schedule using the templates in `.agents/skills/autonomous-dispatcher/SKILL.md` (always prompt `<owner>` before enabling).
+   - If enabling **scheduled/unattended runs**, keep `Autonomous Execution` and configure the schedule using the templates in `.agents/skills/autonomous-dispatcher/SKILL.md` (always prompt the human collaborator before enabling).
 
 ## 3. Verify Readiness
 
-Confirm `AGENTS.md` has no leftover placeholder tokens (`<Project Title>`, `<owner>/<repo>`, `<verify commands>`) and run `python3 .agents/skills/autonomous-dispatcher/scripts/preflight_check.py --dry-run` (if autonomous mode is enabled) to verify the GitHub queue gate works cleanly.
+Confirm `AGENTS.md` has no leftover placeholder tokens (`<Project Title>`, `<owner>/<repo>`, `<@github-handle(s) or domain routing>`, `<verify commands>`) and run `python3 .agents/skills/autonomous-dispatcher/scripts/preflight_check.py --dry-run` (if autonomous mode is enabled) to verify the GitHub queue gate works cleanly.

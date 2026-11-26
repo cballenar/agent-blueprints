@@ -56,6 +56,34 @@ def _check_gh_auth(repo_root: Path) -> str:
     )
 
 
+def _list_collaborators(repo_root: Path, name_with_owner: str) -> list[str]:
+    """Return collaborators with push/admin access, falling back to the active gh user."""
+    try:
+        raw = _run(
+            [
+                "gh",
+                "api",
+                f"repos/{name_with_owner}/collaborators",
+                "--jq",
+                "[.[] | select(.permissions.push == true or .permissions.admin == true) | .login]",
+            ],
+            cwd=repo_root,
+        )
+        logins = json.loads(raw) if raw else []
+        if isinstance(logins, list):
+            cleaned = sorted(str(login) for login in logins if login)
+            if cleaned:
+                return cleaned
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        pass
+
+    try:
+        current = _run(["gh", "api", "user", "--jq", ".login"], cwd=repo_root)
+        return [current] if current else []
+    except subprocess.CalledProcessError:
+        return []
+
+
 def _sync_label(
     repo_root: Path,
     name: str,
@@ -115,6 +143,7 @@ def main() -> int:
     args = parse_args()
     repo_root = _repo_root()
     name_with_owner = _check_gh_auth(repo_root)
+    collaborators = _list_collaborators(repo_root, name_with_owner)
 
     labels_to_sync = list(STATUS_LABELS)
     for raw in args.domains.split(","):
@@ -132,6 +161,7 @@ def main() -> int:
     summary = {
         "repo": name_with_owner,
         "root": str(repo_root),
+        "collaborators": collaborators,
         "dry_run": args.dry_run,
         "labels": synced_labels,
         "project_spec": spec_status,

@@ -1,9 +1,10 @@
-<!-- version: 1.3 -->
+<!-- version: 1.4 -->
 # `<Project Title>` — Agent Workspace Rules
 
 ## Project & Spec
 *(Fill in on deployment.)*
 - **Repo:** `<owner>/<repo>` | **Spec:** `[PROJECT_SPEC.md](./PROJECT_SPEC.md)`
+- **Human Assignee(s):** `<@github-handle(s) or domain routing>` *(default assignees for `status:needs-decision` / `status:human-spike`)*
 - **Goal:** `<1–2 sentence summary>`
 
 ## Project Structure
@@ -38,11 +39,11 @@
 
 GitHub Issues (`gh`) record *when*, *why*, and *how* every change happened—whether working interactively or autonomously.
 
-- **Single Account:** Agents run as `<owner>` via `gh` (no bot user); ownership is determined by assignee + status label. Prefix agent follow-up comments with `**[Agent]**` to distinguish them from `<owner>` replies.
+- **Agent Identity & Accounts:** Agents run via the active collaborator's `gh` account (no separate bot user); ownership is determined by assignee(s) + status label. Always prefix agent comments with `**[Agent]**` to distinguish them from human replies, regardless of which collaborator's `gh` account runs the agent.
 - **Log Approved Work:** Log every confirmed/approved request, feature, or fix as an issue so commits reference `#<n>`.
 - **Evolve, Don't Sprawl:** Append context/decisions as comments, link related issues (`Refs #<n>`), and **reopen/extend** closed issues instead of creating duplicates around the same topic.
 - **Labels & Grouping:** Exclusive status (`status:ready`, `status:in-progress`, `status:needs-decision`, `status:human-spike`, `status:blocked`); `domain:<area>` (modules), Milestones (release waves), optional GitHub Projects (human/cross-repo view; labels + Milestones stay authoritative).
-- **Non-Blocking Human Tasks:** For ambiguities (`status:needs-decision`) or manual/physical tasks (`status:human-spike`), post `**[Agent]**` options, tradeoffs, and a recommended default, assign `<owner>`, mark strictly dependent issues `status:blocked`, and continue unblocked work.
+- **Non-Blocking Human Tasks:** For ambiguities (`status:needs-decision`) or manual/physical tasks (`status:human-spike`), post `**[Agent]**` options, tradeoffs, and a recommended default, assign the default human assignee(s) from `Project & Spec` (or relevant domain owner), mark strictly dependent issues `status:blocked`, and continue unblocked work. During multi-human discussion, starting a comment with `@<assignee>` keeps the issue waiting; unassigning all humans (or posting a settled decision) hands it back to the agent.
 
 ---
 
@@ -79,6 +80,6 @@ Run `preflight_check.py --exit-code` *before* launching an agent if your schedul
 4. If stdout starts with `SKIP:`, reply with that line and stop immediately (0 file reads, 0 extra calls). Proceed only if stdout starts with `RUN:` (`RUN:WORK_READY` or `RUN:RECOVER_STALE`).
 
 ### Autonomous Loop (One Wave Per Run)
-1. Sync `main`; triage `<owner>` replies on human issues (update spec, transition to `status:ready` or close, unblock downstream issues) and finish open PRs first.
+1. Sync `main`; triage settled human replies on human-queue issues (update spec, transition to `status:ready` or close, remove all human assignees, unblock downstream issues) and finish open PRs first.
 2. Execute **at most one wave per run** (1 issue in single-agent mode, or 1 non-colliding `domain:*` batch across isolated `share`/`branch` worker workspaces), remove `status:in-progress` on completion, return to clean `main`, and **exit**—never loop back to claim another wave in the same session.
 3. Unblock satisfied `status:blocked` issues and file follow-up `status:ready` / `status:needs-decision` / `status:human-spike` issues before exiting.

@@ -1,6 +1,6 @@
 ---
 name: autonomous-dispatcher
-version: 1.3
+version: 1.4
 description: Autonomous GitHub issue triage, execution, verification, and delivery loop. Use during scheduled cron runs or when asked to advance the GitHub backlog autonomously.
 ---
 
@@ -39,13 +39,16 @@ python3 .agents/skills/autonomous-dispatcher/scripts/preflight_check.py
    gh issue list --state open --label "status:needs-decision" --json number,title,assignees,comments,updatedAt
    gh issue list --state open --label "status:human-spike" --json number,title,assignees,comments,updatedAt
    ```
-3. For any issue where `<owner>` posted a reply (a latest comment not prefixed with `**[Agent]**`) or removed themselves as assignee:
-   - Record settled decisions in the project spec or as an issue comment.
-   - Transition the issue to `status:ready` (or close if it was a completed spike):
-     ```bash
-     gh issue edit <n> --remove-label "status:needs-decision" --add-label "status:ready" --remove-assignee <owner>
-     ```
-   - Extend/reopen an existing issue when iterating on the same topic instead of fragmenting into duplicates; file child `status:ready` issues only for distinct new workstreams.
+3. For any issue where a human posted a reply (a latest comment not prefixed with `**[Agent]**`) or all human assignees were removed:
+   - **Distinguish settled decisions from ongoing human discussion:** If assignees remain and the latest human comment only asks another collaborator for input, defers, or leaves the question unsettled (e.g., `"@teammate what do you think?"`), **do not** transition to `status:ready`—keep `status:needs-decision` (or `status:human-spike`), optionally add any newly mentioned collaborator as an assignee, and leave it for the humans.
+   - Once the decision or spike is settled (clear human direction/approval, or all assignees removed to hand the issue back):
+     - Record settled decisions in `PROJECT_SPEC.md` or as a `**[Agent]**` issue comment.
+     - Transition the issue to `status:ready` (or close if it was a completed spike) and remove **all** current human assignees:
+       ```bash
+       gh issue edit <n> --remove-label "status:needs-decision" --add-label "status:ready" --remove-assignee "<login1>,<login2>"
+       ```
+       *(Omit `--remove-assignee` if no assignees remain; otherwise list every current assignee login.)*
+     - Extend/reopen an existing issue when iterating on the same topic instead of fragmenting into duplicates; file child `status:ready` issues only for distinct new workstreams.
 
 ---
 
@@ -98,15 +101,15 @@ Each scheduled session executes **at most one wave** and exits—never loop back
    ```
 4. **Unblock & Chain Next Work:**
    - Remove `status:blocked` on newly unblocked downstream issues and comment with links to the landed work (prefix with `**[Agent]**`).
-   - Reopen/append to an existing issue if follow-up work belongs to the same thread; otherwise file new issues (`status:ready` unassigned, or `status:needs-decision` / `status:human-spike` assigned to `<owner>` prefixed with `**[Agent]**`).
-5. **If Blocked Mid-Issue:** Never guess past an ambiguity or land broken work. Comment with findings, options, and a recommended default prefixed with `**[Agent]**`, swap `status:in-progress` -> `status:needs-decision`, assign `<owner>`, and restore clean `main`.
+   - Reopen/append to an existing issue if follow-up work belongs to the same thread; otherwise file new issues (`status:ready` unassigned, or `status:needs-decision` / `status:human-spike` assigned to the default human assignee(s) in `AGENTS.md`, prefixed with `**[Agent]**`).
+5. **If Blocked Mid-Issue:** Never guess past an ambiguity or land broken work. Comment with findings, options, and a recommended default prefixed with `**[Agent]**`, swap `status:in-progress` -> `status:needs-decision`, assign the default human assignee(s) in `AGENTS.md`, and restore clean `main`.
 6. **Milestones & Exit:** When all issues in a Milestone close on green `main`, cut a release (`gh release create vX.Y.Z --generate-notes`). Remove `.git/dispatcher_lease.json` if present, ensure `git status --porcelain` is clean on `main`, and **end the turn** (leave remaining `status:ready` issues for the next scheduled tick).
 
 ---
 
 ## Scheduled Automation Templates
 
-When bootstrapping a repository on a platform that supports agent-created schedules (such as Antigravity's `automation` skill), create the scheduled automation using the appropriate template below and prompt `<owner>` to review permissions and enable it—never force-enable it silently.
+When bootstrapping a repository on a platform that supports agent-created schedules (such as Antigravity's `automation` skill), create the scheduled automation using the appropriate template below and prompt the human collaborator to review permissions and enable it—never force-enable it silently.
 
 - **Unattended Permissions:** Headless runs require pre-approved network/config access for `gh`, `git`, and `preflight_check.py` (e.g., `BypassSandbox` or allowlisted command rules) so they do not stall on interactive permission prompts.
 - **Upgrading from v1.0:** Updating files in-repo does not update external scheduler prompts. Ensure any existing scheduled prompt triggers on `RUN:` (or both `RUN:WORK_READY` and `RUN:RECOVER_STALE`) so timed-out runs are recovered.
